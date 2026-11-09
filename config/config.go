@@ -59,6 +59,11 @@ var (
 	// allowing multiple isolated instances of Mailpit to share a database.
 	TenantID string
 
+	// SegmentDomain enables per SMTP user segments when set. Messages are stored in a
+	// segment named after the (normalized) SMTP username, and each segment is served
+	// on <segment>.<SegmentDomain> by the web UI and API.
+	SegmentDomain string
+
 	// Label to identify this Mailpit instance (optional).
 	// This gets applied to web UI, SMTP and optional POP3 server.
 	Label string
@@ -332,6 +337,11 @@ func VerifyConfig() error {
 	TenantID = DBTenantID(TenantID)
 	if TenantID != "" {
 		logger.Log().Infof("[db] using tenant \"%s\"", TenantID)
+	}
+
+	SegmentDomain = strings.Trim(strings.ToLower(strings.TrimSpace(SegmentDomain)), ".")
+	if SegmentDomain != "" {
+		logger.Log().Infof("[segments] storing messages per SMTP user, served on <segment>.%s", SegmentDomain)
 	}
 
 	re := regexp.MustCompile(`.*:\d+$`)

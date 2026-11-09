@@ -24,6 +24,7 @@ import (
 	"github.com/axllent/mailpit/internal/logger"
 	"github.com/axllent/mailpit/internal/pop3"
 	"github.com/axllent/mailpit/internal/prometheus"
+	"github.com/axllent/mailpit/internal/segment"
 	"github.com/axllent/mailpit/internal/shortuuid"
 	"github.com/axllent/mailpit/internal/snakeoil"
 	"github.com/axllent/mailpit/internal/stats"
@@ -463,7 +464,7 @@ func viewHandler(w http.ResponseWriter, r *http.Request) {
 // Authentication and CORS are handled by middleWareFunc before this is reached.
 func apiWebsocket(w http.ResponseWriter, r *http.Request) {
 	websockets.ServeWs(websockets.MessageHub, w, r)
-	storage.BroadcastMailboxStats()
+	storage.BroadcastMailboxStats(segment.FromRequest(r))
 }
 
 // licenseInfo returns structured license information for Mailpit and its third-party dependencies.

@@ -19,6 +19,7 @@ import (
 
 	"github.com/axllent/mailpit/config"
 	"github.com/axllent/mailpit/internal/logger"
+	"github.com/axllent/mailpit/internal/segment"
 	"github.com/axllent/mailpit/internal/shortuuid"
 	"github.com/axllent/mailpit/internal/tools"
 	"github.com/axllent/mailpit/server/webhook"
@@ -27,10 +28,17 @@ import (
 	"github.com/leporo/sqlf"
 )
 
-// Store will save an email to the database tables.
+// errMessageNotFound is returned when a message does not exist within the requested segment
+var errMessageNotFound = errors.New("message not found")
+
+// Store will save an email to the database tables within a segment.
 // The username is the authentication username of either the SMTP or HTTP client (blank for none).
 // Returns the database ID of the saved message.
-func Store(body *[]byte, username *string) (string, error) {
+func Store(seg string, body *[]byte, username *string) (string, error) {
+	if seg == segment.All {
+		return "", errors.New("invalid segment")
+	}
+
 	// Parse message body with enmime
 	env, err := envelopeParser.ReadEnvelope(bytes.NewReader(*body))
 	if err != nil {
@@ -97,13 +105,13 @@ func Store(body *[]byte, username *string) (string, error) {
 	snippet := tools.CreateSnippet(env.Text, env.HTML)
 
 	sql := fmt.Sprintf(`INSERT INTO %s 
-    	(Created, ID, MessageID, Subject, Metadata, Size, Inline, Attachments, SearchText, Read, Snippet) 
-	    VALUES(?,?,?,?,?,?,?,?,?,0,?)`,
+    	(Created, ID, MessageID, Subject, Metadata, Size, Inline, Attachments, SearchText, Read, Snippet, Segment) 
+	    VALUES(?,?,?,?,?,?,?,?,?,0,?,?)`,
 		tenant("mailbox"),
 	) // #nosec
 
 	// insert mail summary data
-	_, err = tx.Exec(sql, created.UnixMilli(), id, messageID, subject, string(summaryJSON), size, inline, attachments, searchText, snippet)
+	_, err = tx.Exec(sql, created.UnixMilli(), id, messageID, subject, string(summaryJSON), size, inline, attachments, searchText, snippet, seg)
 	if err != nil {
 		return "", err
 	}
@@ -159,7 +167,7 @@ func Store(body *[]byte, username *string) (string, error) {
 
 	setTags := []string{}
 	if len(tags) > 0 {
-		setTags, err = SetMessageTags(id, tags)
+		setTags, err = SetMessageTags(seg, id, tags)
 		if err != nil {
 			return "", err
 		}
@@ -200,27 +208,29 @@ func Store(body *[]byte, username *string) (string, error) {
 		c.ReplyTo = []*mail.Address{}
 	}
 
-	websockets.Broadcast("new", c)
-	webhook.Send(c)
+	websockets.BroadcastSegment(seg, "new", c)
+	webhook.Send(seg, c)
 
 	dbLastAction = time.Now()
 
-	BroadcastMailboxStats()
+	BroadcastMailboxStats(seg)
 
 	logger.Log().Debugf("[db] saved message %s (%d bytes)", id, size)
 
 	return id, nil
 }
 
-// List returns a subset of messages from the mailbox,
+// List returns a subset of messages from the mailbox segment,
 // sorted latest to oldest
-func List(start int, beforeTS int64, limit int) ([]MessageSummary, error) {
+func List(seg string, start int, beforeTS int64, limit int) ([]MessageSummary, error) {
 	results := []MessageSummary{}
 	tsStart := time.Now()
 
 	q := sqlf.From(tenant("mailbox") + " m").
 		Select(`m.Created, m.ID, m.MessageID, m.Subject, m.Metadata, m.Size, m.Attachments, m.Read, m.Snippet`).
 		OrderBy("m.Created DESC")
+
+	q = whereSegment(q, "m.Segment", seg)
 
 	if limit > 0 {
 		q = q.Limit(limit).Offset(start)
@@ -306,14 +316,18 @@ func List(start int, beforeTS int64, limit int) ([]MessageSummary, error) {
 
 // GetMessage returns a Message generated from the mailbox_data collection.
 // If the message lacks a date header, then the received datetime is used.
-func GetMessage(id string) (*Message, error) {
+func GetMessage(seg, id string) (*Message, error) {
+	if !messageInSegment(seg, id) {
+		return nil, errMessageNotFound
+	}
+
 	env, rawSize, err := getCachedEnvelope(id)
 	if err != nil {
 		return nil, err
 	}
 
 	// Load metadata from DB
-	meta, err := GetMetadata(id)
+	meta, err := GetMetadata(seg, id)
 	if err != nil {
 		meta = Metadata{}
 	}
@@ -410,7 +424,7 @@ func GetMessage(id string) (*Message, error) {
 	}
 
 	// mark message as read
-	if err := MarkRead([]string{id}); err != nil {
+	if err := MarkRead(seg, []string{id}); err != nil {
 		return &obj, err
 	}
 
@@ -419,8 +433,17 @@ func GetMessage(id string) (*Message, error) {
 	return &obj, nil
 }
 
-// GetMessageRaw returns an []byte of the full message
-func GetMessageRaw(id string) ([]byte, error) {
+// GetMessageRaw returns an []byte of the full message within a segment
+func GetMessageRaw(seg, id string) ([]byte, error) {
+	if !messageInSegment(seg, id) {
+		return nil, errMessageNotFound
+	}
+
+	return getMessageRaw(id)
+}
+
+// getMessageRaw returns an []byte of the full message, regardless of the segment
+func getMessageRaw(id string) ([]byte, error) {
 	var i, msg string
 	var compressed int
 	q := sqlf.From(tenant("mailbox_data")).
@@ -462,7 +485,11 @@ func GetMessageRaw(id string) ([]byte, error) {
 }
 
 // GetAttachmentPart returns an *enmime.Part (attachment or inline) from a message
-func GetAttachmentPart(id, partID string) (*enmime.Part, error) {
+func GetAttachmentPart(seg, id, partID string) (*enmime.Part, error) {
+	if !messageInSegment(seg, id) {
+		return nil, errMessageNotFound
+	}
+
 	env, _, err := getCachedEnvelope(id)
 	if err != nil {
 		return nil, err
@@ -518,18 +545,18 @@ func AttachmentSummary(a *enmime.Part) Attachment {
 //
 // If a query argument is set in the request the function will return the
 // latest message matching the search
-func LatestID(r *http.Request) (string, error) {
+func LatestID(seg string, r *http.Request) (string, error) {
 	var messages []MessageSummary
 	var err error
 
 	search := strings.TrimSpace(r.URL.Query().Get("query"))
 	if search != "" {
-		messages, _, err = Search(search, r.URL.Query().Get("tz"), 0, 0, 1)
+		messages, _, err = Search(seg, search, r.URL.Query().Get("tz"), 0, 0, 1)
 		if err != nil {
 			return "", err
 		}
 	} else {
-		messages, err = List(0, 0, 1)
+		messages, err = List(seg, 0, 0, 1)
 		if err != nil {
 			return "", err
 		}
@@ -541,8 +568,8 @@ func LatestID(r *http.Request) (string, error) {
 	return messages[0].ID, nil
 }
 
-// MarkRead will mark a message as read
-func MarkRead(ids []string) error {
+// MarkRead will mark messages within a segment as read
+func MarkRead(seg string, ids []string) error {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -555,7 +582,8 @@ func MarkRead(ids []string) error {
 
 	// Find which messages are actually unread (will change state)
 	toUpdate := []string{}
-	rows, err := db.Query(fmt.Sprintf(`SELECT ID FROM %s WHERE Read = 0 AND ID IN %s`, tenant("mailbox"), placeholder), args...) // #nosec
+	segSQL, segArgs := segmentSQL("Segment", seg)
+	rows, err := db.Query(fmt.Sprintf(`SELECT ID FROM %s WHERE Read = 0 AND ID IN %s%s`, tenant("mailbox"), placeholder, segSQL), append(args, segArgs...)...) // #nosec
 	if err != nil {
 		return err
 	}
@@ -589,19 +617,19 @@ func MarkRead(ids []string) error {
 
 	for _, id := range toUpdate {
 		logger.Log().Debugf("[db] marked message %s as read", id)
-		websockets.Broadcast("update", struct {
+		websockets.BroadcastSegment(seg, "update", struct {
 			ID   string
 			Read bool
 		}{ID: id, Read: true})
 	}
 
-	BroadcastMailboxStats()
+	BroadcastMailboxStats(seg)
 
 	return nil
 }
 
-// MarkUnread will mark a message as unread
-func MarkUnread(ids []string) error {
+// MarkUnread will mark messages within a segment as unread
+func MarkUnread(seg string, ids []string) error {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -614,7 +642,8 @@ func MarkUnread(ids []string) error {
 
 	// Find which messages are actually read (will change state)
 	toUpdate := []string{}
-	rows, err := db.Query(fmt.Sprintf(`SELECT ID FROM %s WHERE Read = 1 AND ID IN %s`, tenant("mailbox"), placeholder), args...) // #nosec
+	segSQL, segArgs := segmentSQL("Segment", seg)
+	rows, err := db.Query(fmt.Sprintf(`SELECT ID FROM %s WHERE Read = 1 AND ID IN %s%s`, tenant("mailbox"), placeholder, segSQL), append(args, segArgs...)...) // #nosec
 	if err != nil {
 		return err
 	}
@@ -650,28 +679,29 @@ func MarkUnread(ids []string) error {
 
 	for _, id := range toUpdate {
 		logger.Log().Debugf("[db] marked message %s as unread", id)
-		websockets.Broadcast("update", struct {
+		websockets.BroadcastSegment(seg, "update", struct {
 			ID   string
 			Read bool
 		}{ID: id, Read: false})
 	}
 
-	BroadcastMailboxStats()
+	BroadcastMailboxStats(seg)
 
 	return nil
 }
 
-// MarkAllRead will mark all messages as read
-func MarkAllRead() error {
+// MarkAllRead will mark all messages within a segment as read
+func MarkAllRead(seg string) error {
 	var (
 		start = time.Now()
-		total = CountUnread()
+		total = CountUnread(seg)
 	)
 
-	_, err := sqlf.Update(tenant("mailbox")).
+	q := sqlf.Update(tenant("mailbox")).
 		Set("Read", 1).
-		Where("Read = ?", 0).
-		ExecAndClose(context.Background(), db)
+		Where("Read = ?", 0)
+
+	_, err := whereSegment(q, "Segment", seg).ExecAndClose(context.Background(), db)
 	if err != nil {
 		return err
 	}
@@ -679,24 +709,25 @@ func MarkAllRead() error {
 	elapsed := time.Since(start)
 	logger.Log().Debugf("[db] marked %v messages as read in %s", total, elapsed)
 
-	BroadcastMailboxStats()
+	BroadcastMailboxStats(seg)
 
 	dbLastAction = time.Now()
 
 	return nil
 }
 
-// MarkAllUnread will mark all messages as unread
-func MarkAllUnread() error {
+// MarkAllUnread will mark all messages within a segment as unread
+func MarkAllUnread(seg string) error {
 	var (
 		start = time.Now()
-		total = CountRead()
+		total = CountRead(seg)
 	)
 
-	_, err := sqlf.Update(tenant("mailbox")).
+	q := sqlf.Update(tenant("mailbox")).
 		Set("Read", 0).
-		Where("Read = ?", 1).
-		ExecAndClose(context.Background(), db)
+		Where("Read = ?", 1)
+
+	_, err := whereSegment(q, "Segment", seg).ExecAndClose(context.Background(), db)
 	if err != nil {
 		return err
 	}
@@ -704,15 +735,15 @@ func MarkAllUnread() error {
 	elapsed := time.Since(start)
 	logger.Log().Debugf("[db] marked %v messages as unread in %s", total, elapsed)
 
-	BroadcastMailboxStats()
+	BroadcastMailboxStats(seg)
 
 	dbLastAction = time.Now()
 
 	return nil
 }
 
-// DeleteMessages deletes one or more messages in bulk
-func DeleteMessages(ids []string) error {
+// DeleteMessages deletes one or more messages within a segment in bulk
+func DeleteMessages(seg string, ids []string) error {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -724,8 +755,9 @@ func DeleteMessages(ids []string) error {
 		args[i] = id
 	}
 
-	sql := fmt.Sprintf(`SELECT ID, Size FROM %s WHERE  ID IN (?%s)`, tenant("mailbox"), strings.Repeat(",?", len(args)-1)) // #nosec
-	rows, err := db.Query(sql, args...)
+	segSQL, segArgs := segmentSQL("Segment", seg)
+	sql := fmt.Sprintf(`SELECT ID, Size FROM %s WHERE  ID IN (?%s)%s`, tenant("mailbox"), strings.Repeat(",?", len(args)-1), segSQL) // #nosec
+	rows, err := db.Query(sql, append(args, segArgs...)...)
 	if err != nil {
 		return err
 	}
@@ -797,7 +829,7 @@ func DeleteMessages(ids []string) error {
 
 	logger.Log().Debugf("[db] deleted %d %s in %s", len(toDelete), messages, elapsed)
 
-	BroadcastMailboxStats()
+	BroadcastMailboxStats(seg)
 
 	// broadcast individual message deletions
 	for _, id := range toDelete {
@@ -807,14 +839,19 @@ func DeleteMessages(ids []string) error {
 			ID string
 		}{ID: id}
 
-		websockets.Broadcast("delete", d)
+		websockets.BroadcastSegment(seg, "delete", d)
 	}
 
 	return nil
 }
 
-// DeleteAllMessages will delete all messages from a mailbox
-func DeleteAllMessages() error {
+// DeleteAllMessages will delete all messages from a mailbox segment
+func DeleteAllMessages(seg string) error {
+	if segmentFiltered(seg) {
+		// only delete the messages in this segment, leaving the other segments untouched
+		return DeleteSearch(seg, "", "")
+	}
+
 	var (
 		start = time.Now()
 		total int
@@ -860,7 +897,7 @@ func DeleteAllMessages() error {
 
 	logMessagesDeleted(total)
 
-	BroadcastMailboxStats()
+	BroadcastMailboxStats(seg)
 
 	invalidateAllEnvelopeCache()
 
@@ -869,10 +906,11 @@ func DeleteAllMessages() error {
 	return err
 }
 
-// GetMetadata retrieves the metadata for a message by its ID
-func GetMetadata(id string) (Metadata, error) {
+// GetMetadata retrieves the metadata for a message by its ID within a segment
+func GetMetadata(seg, id string) (Metadata, error) {
 	var metadataJSON string
-	row := db.QueryRow(fmt.Sprintf("SELECT Metadata FROM %s WHERE ID = ?", tenant("mailbox")), id)
+	segSQL, segArgs := segmentSQL("Segment", seg)
+	row := db.QueryRow(fmt.Sprintf("SELECT Metadata FROM %s WHERE ID = ?%s", tenant("mailbox"), segSQL), append([]any{id}, segArgs...)...) // #nosec
 	if err := row.Scan(&metadataJSON); err != nil {
 		return Metadata{}, err
 	}
