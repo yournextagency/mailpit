@@ -112,7 +112,7 @@ func Listen() {
 		middleWareFunc(index)(w, r)
 	})
 
-	if auth.UICredentials != nil {
+	if auth.UICredentials != nil || segment.AuthEnabled() {
 		logger.Log().Info("[http] enabling basic authentication")
 	}
 
@@ -215,7 +215,7 @@ func listenLimited(network, address string) (net.Listener, error) {
 // case, whereas a LAN-reachable listener is the shape most likely to be hit
 // in practice and is worth flagging explicitly.
 func warnIfExposedWithoutHostProtection() {
-	if AllowedHosts != "" || auth.UICredentials != nil {
+	if AllowedHosts != "" || auth.UICredentials != nil || segment.AuthEnabled() {
 		return
 	}
 	if _, _, isSocket := tools.UnixSocket(config.HTTPListen); isSocket {
@@ -409,7 +409,12 @@ func middleWareFunc(fn http.HandlerFunc) http.HandlerFunc {
 		// for a specific request without touching the global auth.UICredentials pointer.
 		skipUIAuth, _ := r.Context().Value(skipUIAuthKey).(bool)
 		isCORSOptionsRequest := AccessControlAllowOrigin != "" && r.Method == http.MethodOptions
-		if !skipUIAuth && !isCORSOptionsRequest && auth.UICredentials != nil {
+		if !skipUIAuth && !isCORSOptionsRequest && segment.AuthEnabled() {
+			if !segment.AuthenticateRequest(r) {
+				basicAuthResponse(w)
+				return
+			}
+		} else if !skipUIAuth && !isCORSOptionsRequest && auth.UICredentials != nil {
 			user, pass, ok := r.BasicAuth()
 
 			if !ok {

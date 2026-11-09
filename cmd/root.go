@@ -91,6 +91,7 @@ func init() {
 	rootCmd.Flags().StringVar(&config.Label, "label", config.Label, "Optional label identify this Mailpit instance")
 	rootCmd.Flags().StringVar(&config.TenantID, "tenant-id", config.TenantID, "Database tenant ID to isolate data")
 	rootCmd.Flags().StringVar(&config.SegmentDomain, "segment-domain", config.SegmentDomain, "Store messages per SMTP user and serve each on <user>.<segment-domain>")
+	rootCmd.Flags().StringVar(&config.SegmentPasswordEnv, "segment-password-env", config.SegmentPasswordEnv, "Name of the environment variable with the shared password; SMTP and web UI login is then the segment name plus this password")
 	rootCmd.Flags().IntVarP(&config.MaxMessages, "max", "m", config.MaxMessages, "Max number of messages to store")
 	rootCmd.Flags().StringVar(&config.MaxAge, "max-age", config.MaxAge, "Max age of messages in either (h)ours or (d)ays, 0d to disable (eg: 3d)")
 	rootCmd.Flags().IntVar(&config.MaxMessageSize, "max-message-size", config.MaxMessageSize, "Maximum message size in MB (0 = unlimited)")
@@ -220,6 +221,10 @@ func initConfigFromEnv() {
 
 	if len(os.Getenv("MP_SEGMENT_DOMAIN")) > 0 {
 		config.SegmentDomain = os.Getenv("MP_SEGMENT_DOMAIN")
+	}
+
+	if len(os.Getenv("MP_SEGMENT_PASSWORD_ENV")) > 0 {
+		config.SegmentPasswordEnv = os.Getenv("MP_SEGMENT_PASSWORD_ENV")
 	}
 
 	if len(os.Getenv("MP_MAX_MESSAGES")) > 0 {

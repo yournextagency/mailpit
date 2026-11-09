@@ -126,7 +126,12 @@ func (c *Client) writePump() {
 
 // ServeWs handles websocket requests from the peer.
 func ServeWs(hub *Hub, w http.ResponseWriter, r *http.Request) {
-	if auth.UICredentials != nil {
+	if segment.AuthEnabled() {
+		if !segment.AuthenticateRequest(r) {
+			basicAuthResponse(w)
+			return
+		}
+	} else if auth.UICredentials != nil {
 		user, pass, ok := r.BasicAuth()
 
 		if !ok {

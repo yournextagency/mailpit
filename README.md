@@ -127,7 +127,15 @@ mailpit --segment-domain mail.example.com --smtp-auth-accept-any --smtp-auth-all
 - Webhooks include a `Mailpit-Segment` header. Prometheus metrics and `mailpit dump` cover all segments.
 - Existing messages are kept in the default segment. Without `--segment-domain` nothing changes.
 
-Segments separate projects, they are not access control: anyone who can reach `beta.mail.example.com` sees segment `beta`. Use `--smtp-auth-file` for known usernames and put authentication in front of the web UI if that matters to you. Mailpit must receive the original `Host` header, and with `--allowed-hosts` the segment domain and its subdomains are allowed automatically.
+#### Segment login (`--segment-password-env`)
+
+Together with `--segment-domain`, `--segment-password-env MAILBOX_PASSWORD` names an environment variable with one shared password and replaces the SMTP and UI password files:
+
+- SMTP: the username is the segment (only `a-z`, `0-9` and `-` are accepted, no other normalization) and the password must be the shared value. STARTTLS is required unless `--smtp-auth-allow-insecure` is set.
+- Web UI, API and websocket on `<segment>.<segment-domain>`: basic auth where the username must equal the segment of the host and the password is the shared value. A login for one segment never opens another. Hosts without a segment are refused.
+- It cannot be combined with `--smtp-auth-file`, `--ui-auth-file`, `--smtp-auth-accept-any`. Without the flag nothing changes.
+
+Without that flag, segments separate projects, they are not access control: anyone who can reach `beta.mail.example.com` sees segment `beta`. Use `--smtp-auth-file` for known usernames and put authentication in front of the web UI if that matters to you. Mailpit must receive the original `Host` header, and with `--allowed-hosts` the segment domain and its subdomains are allowed automatically.
 
 Point a wildcard DNS record (`*.mail.example.com`) to the server, then proxy the wildcard host to Mailpit. With Caddy (wildcard certificates need a DNS challenge):
 

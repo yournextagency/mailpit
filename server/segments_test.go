@@ -258,3 +258,47 @@ func TestSegmentsWebsocket(t *testing.T) {
 		t.Fatalf("beta client received new message events of alpha: %v", betaIDs)
 	}
 }
+
+func TestSegmentsPasswordAuth(t *testing.T) {
+	setup()
+	defer storage.Close()
+	enableTestSegments(t)
+
+	config.SegmentPassword = "shared"
+	t.Cleanup(func() { config.SegmentPassword = "" })
+
+	storeSegmentMessage(t, "alpha", "Alpha mail")
+
+	handler := apiRoutes()
+
+	get := func(host, user, pass string) int {
+		req := httptest.NewRequest("GET", "http://"+host+"/api/v1/messages", nil)
+		req.Host = host
+		if user != "" || pass != "" {
+			req.SetBasicAuth(user, pass)
+		}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		return rec.Code
+	}
+
+	tests := []struct {
+		host, user, pass string
+		code             int
+	}{
+		{testSegmentHosts["alpha"], "alpha", "shared", http.StatusOK},
+		{testSegmentHosts["beta"], "beta", "shared", http.StatusOK},
+		{testSegmentHosts["beta"], "alpha", "shared", http.StatusUnauthorized},
+		{testSegmentHosts["alpha"], "beta", "shared", http.StatusUnauthorized},
+		{testSegmentHosts["alpha"], "alpha", "wrong", http.StatusUnauthorized},
+		{testSegmentHosts["alpha"], "", "", http.StatusUnauthorized},
+		{testSegmentHosts[""], "alpha", "shared", http.StatusUnauthorized},
+	}
+
+	for _, tc := range tests {
+		if got := get(tc.host, tc.user, tc.pass); got != tc.code {
+			t.Errorf("GET on %s as %q/%q returned %d, expected %d", tc.host, tc.user, tc.pass, got, tc.code)
+		}
+	}
+}

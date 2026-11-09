@@ -149,6 +149,18 @@ func SaveToDatabase(seg string, origin net.Addr, from string, to []string, data 
 	return id, err
 }
 
+// authHandlerSegment accepts a valid segment name as username with the shared segment password
+func authHandlerSegment(remoteAddr net.Addr, mechanism string, username []byte, password []byte, _ []byte) (bool, error) {
+	allow := segment.AuthenticateUser(string(username), string(password))
+	if allow {
+		logger.Log().Debugf("[smtpd] allow %s login:%q from:%s", mechanism, string(username), cleanIP(remoteAddr))
+	} else {
+		logger.Log().Warnf("[smtpd] deny %s login:%q from:%s", mechanism, string(username), cleanIP(remoteAddr))
+	}
+
+	return allow, nil
+}
+
 func authHandler(remoteAddr net.Addr, mechanism string, username []byte, password []byte, _ []byte) (bool, error) {
 	allow := auth.SMTPCredentials.Match(string(username), string(password))
 	if allow {
@@ -186,17 +198,21 @@ func handlerRcpt(remoteAddr net.Addr, from string, to string) bool {
 // Listen starts the SMTPD server
 func Listen() error {
 	if config.SMTPAuthAllowInsecure {
-		if auth.SMTPCredentials != nil {
+		if auth.SMTPCredentials != nil || segment.AuthEnabled() {
 			logger.Log().Info("[smtpd] enabling login authentication (insecure)")
 		} else if config.SMTPAuthAcceptAny {
 			logger.Log().Info("[smtpd] enabling any authentication (insecure)")
 		}
 	} else {
-		if auth.SMTPCredentials != nil {
+		if auth.SMTPCredentials != nil || segment.AuthEnabled() {
 			logger.Log().Info("[smtpd] enabling login authentication")
 		} else if config.SMTPAuthAcceptAny {
 			logger.Log().Info("[smtpd] enabling any authentication")
 		}
+	}
+
+	if segment.AuthEnabled() {
+		return listenAndServe(config.SMTPListen, mailHandler, authHandlerSegment)
 	}
 
 	return listenAndServe(config.SMTPListen, mailHandler, authHandler)
@@ -259,7 +275,7 @@ func listenAndServe(addr string, handler MsgIDHandler, authHandler AuthHandler) 
 		}
 	}
 
-	if auth.SMTPCredentials != nil {
+	if auth.SMTPCredentials != nil || segment.AuthEnabled() {
 		srv.AuthMechs = map[string]bool{
 			"CRAM-MD5": false,
 			"PLAIN":    true,
@@ -308,7 +324,7 @@ func listenAndServe(addr string, handler MsgIDHandler, authHandler AuthHandler) 
 				smtpType = "STARTTLS required"
 			} else {
 				smtpType = "STARTTLS optional"
-				if !config.SMTPAuthAllowInsecure && auth.SMTPCredentials != nil {
+				if !config.SMTPAuthAllowInsecure && (auth.SMTPCredentials != nil || segment.AuthEnabled()) {
 					smtpType = "STARTTLS required"
 				}
 			}

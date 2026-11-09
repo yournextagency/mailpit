@@ -3,6 +3,7 @@ package smtpd
 import (
 	"encoding/base64"
 	"fmt"
+	"net"
 	"os"
 	"testing"
 
@@ -110,5 +111,32 @@ func TestSMTPAuthUsernameSegmentDisabled(t *testing.T) {
 	}
 	if got := storage.CountTotal("alpha"); got != 0 {
 		t.Errorf("expected no message in segment alpha, got %d", got)
+	}
+}
+
+func TestAuthHandlerSegment(t *testing.T) {
+	config.SegmentDomain = "mail.example.com"
+	config.SegmentPassword = "shared"
+	defer func() {
+		config.SegmentDomain = ""
+		config.SegmentPassword = ""
+	}()
+
+	tests := []struct {
+		user, pass string
+		ok         bool
+	}{
+		{"alpha", "shared", true},
+		{"alpha", "wrong", false},
+		{"Alpha", "shared", false},
+		{"alpha.project", "shared", false},
+		{"", "shared", false},
+	}
+
+	for _, tc := range tests {
+		got, err := authHandlerSegment(&net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1025}, "PLAIN", []byte(tc.user), []byte(tc.pass), nil)
+		if err != nil || got != tc.ok {
+			t.Errorf("authHandlerSegment(%q, %q) = %v, expected %v", tc.user, tc.pass, got, tc.ok)
+		}
 	}
 }

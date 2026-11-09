@@ -7,6 +7,7 @@
 package segment
 
 import (
+	"crypto/subtle"
 	"net"
 	"net/http"
 	"regexp"
@@ -103,4 +104,41 @@ func HostAllowed(host string) bool {
 	h = strings.TrimSuffix(h, ".")
 
 	return h == config.SegmentDomain || strings.HasSuffix(h, "."+config.SegmentDomain)
+}
+
+// AuthEnabled returns whether segment authentication is active (--segment-password-env).
+// SMTP and web UI logins are then the segment name plus one shared password.
+func AuthEnabled() bool {
+	return Enabled() && config.SegmentPassword != ""
+}
+
+func passwordMatches(password string) bool {
+	return subtle.ConstantTimeCompare([]byte(password), []byte(config.SegmentPassword)) == 1
+}
+
+// AuthenticateUser checks an SMTP login: the username must be a valid segment name
+// (lowercase letters, digits and dashes) and the password must be the shared password.
+func AuthenticateUser(username, password string) bool {
+	if !AuthEnabled() || username == "" || Normalize(username) != username {
+		return false
+	}
+
+	return passwordMatches(password)
+}
+
+// AuthenticateRequest checks the basic auth login of an HTTP request: the username must
+// be the segment of the request host, so a login for one segment never opens another.
+// Hosts that are not a segment host (the default segment) are always refused.
+func AuthenticateRequest(r *http.Request) bool {
+	user, pass, ok := r.BasicAuth()
+	if !ok || !AuthEnabled() {
+		return false
+	}
+
+	seg := FromRequest(r)
+	if seg == Default || subtle.ConstantTimeCompare([]byte(user), []byte(seg)) != 1 {
+		return false
+	}
+
+	return passwordMatches(pass)
 }
