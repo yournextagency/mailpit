@@ -92,7 +92,7 @@ func init() {
 	rootCmd.Flags().StringVar(&config.TenantID, "tenant-id", config.TenantID, "Database tenant ID to isolate data")
 	rootCmd.Flags().StringVar(&config.SegmentDomain, "segment-domain", config.SegmentDomain, "Store messages per SMTP user and serve each on <user>.<segment-domain>")
 	rootCmd.Flags().IntVarP(&config.MaxMessages, "max", "m", config.MaxMessages, "Max number of messages to store")
-	rootCmd.Flags().StringVar(&config.MaxAge, "max-age", config.MaxAge, "Max age of messages in either (h)ours or (d)ays (eg: 3d)")
+	rootCmd.Flags().StringVar(&config.MaxAge, "max-age", config.MaxAge, "Max age of messages in either (h)ours or (d)ays, 0d to disable (eg: 3d)")
 	rootCmd.Flags().IntVar(&config.MaxMessageSize, "max-message-size", config.MaxMessageSize, "Maximum message size in MB (0 = unlimited)")
 	rootCmd.Flags().BoolVar(&config.UseMessageDates, "use-message-dates", config.UseMessageDates, "Use message dates as the received dates")
 	rootCmd.Flags().BoolVar(&config.IgnoreDuplicateIDs, "ignore-duplicate-ids", config.IgnoreDuplicateIDs, "Ignore duplicate messages (by Message-ID)")

@@ -29,6 +29,8 @@ Mailpit was originally **inspired** by MailHog which is [no longer maintained](h
 ![Mailpit](https://raw.githubusercontent.com/axllent/mailpit/develop/server/ui-src/screenshot.png)
 
 
+> This is the Your Next Agency fork of Mailpit. It adds [segments per SMTP user](#segments-per-smtp-user) and keeps messages for 30 days by default (`--max-age 30d`, set `--max-age 0d` or `MP_MAX_AGE=0d` to keep them until `--max` prunes them).
+
 ## Features
 
 - Runs entirely from a single [static binary](https://mailpit.axllent.org/docs/install/) or multi-architecture [Docker images](https://mailpit.axllent.org/docs/install/docker/)
@@ -47,7 +49,7 @@ including image thumbnails), including optional [HTTPS](https://mailpit.axllent.
 - [SMTP relaying](https://mailpit.axllent.org/docs/configuration/smtp-relay/) (message release) - relay messages via a different SMTP server including an optional allowlist of accepted recipients
 - [SMTP forwarding](https://mailpit.axllent.org/docs/configuration/smtp-forward/) - automatically forward messages via a different SMTP server to predefined email addresses
 - Fast message [storing & processing](https://mailpit.axllent.org/docs/configuration/email-storage/) - ingesting 200-300 emails per second over SMTP depending on CPU, network speed & email size,
-easily handling tens of thousands of emails, with automatic email pruning by volume or message age (by default keeping the most recent 500 emails)
+easily handling tens of thousands of emails, with automatic email pruning by volume or message age (by default keeping the most recent 500 emails, and in this fork no email older than 30 days)
 - [Chaos](https://mailpit.axllent.org/docs/integration/chaos/) feature to enable configurable SMTP errors to test application resilience
 - `List-Unsubscribe` syntax validation
 - Optional [webhook](https://mailpit.axllent.org/docs/integration/webhook/) for received messages
@@ -121,7 +123,7 @@ mailpit --segment-domain mail.example.com --smtp-auth-accept-any --smtp-auth-all
 - A message is stored in the segment of the SMTP username the client authenticated with, so a project sending as `alpha` lands in segment `alpha`. Usernames are lowercased and every character other than `a-z`, `0-9` and `-` becomes a `-` (`Alpha.Project` becomes `alpha-project`). Mail sent without authentication goes to the default segment.
 - The web UI and the whole API (including the websocket, tags, search, delete, release, and the send API) only show and change the segment of the request `Host`: `alpha.mail.example.com` shows segment `alpha`. Any other host shows the default segment. This is enforced in the storage layer, so a message ID from another segment returns a 404.
 - POP3 users see the segment of their POP3 username.
-- `--max` applies per segment, so one busy project cannot push out the mail of another. `--max-age` applies to all messages.
+- `--max` applies per segment, so one busy project cannot push out the mail of another. `--max-age` applies to all messages (30 days by default in this fork).
 - Webhooks include a `Mailpit-Segment` header. Prometheus metrics and `mailpit dump` cover all segments.
 - Existing messages are kept in the default segment. Without `--segment-domain` nothing changes.
 

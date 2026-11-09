@@ -71,9 +71,10 @@ var (
 	// MaxMessages is the maximum number of messages a mailbox can have (auto-pruned every minute)
 	MaxMessages = 500
 
-	// MaxAge is the maximum age of messages (auto-pruned every hour).
-	// Value can be either <int>h for hours or <int>d for days
-	MaxAge string
+	// MaxAge is the maximum age of messages (checked every minute).
+	// Value can be either <int>h for hours or <int>d for days, 0d disables it.
+	// The YNA fork defaults to 30 days.
+	MaxAge = "30d"
 
 	// MaxAgeInHours is the maximum age of messages in hours, set with parseMaxAge() using MaxAge value
 	MaxAgeInHours int
