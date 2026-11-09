@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/axllent/mailpit/config"
 	"github.com/axllent/mailpit/internal/segment"
@@ -340,4 +341,36 @@ func inSlice(s string, list []string) bool {
 	}
 
 	return false
+}
+
+func TestSegmentsPruneMaxAge(t *testing.T) {
+	setup("")
+	defer Close()
+	enableSegments(t)
+
+	config.UseMessageDates = true
+	config.MaxAgeInHours = 24
+	defer func() {
+		config.UseMessageDates = false
+		config.MaxAgeInHours = 0
+	}()
+
+	store := func(seg string, age time.Duration) {
+		b := []byte("Date: " + time.Now().Add(-age).Format(time.RFC1123Z) + "\r\nFrom: sender@example.com\r\nTo: recipient@example.com\r\nSubject: Test\r\n\r\nHello\r\n")
+		if _, err := Store(seg, &b, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// --max-age is applied to every segment
+	for _, seg := range []string{segment.Default, "alpha", "beta"} {
+		store(seg, 48*time.Hour)
+		store(seg, time.Hour)
+	}
+
+	pruneMessages()
+
+	for _, seg := range []string{segment.Default, "alpha", "beta"} {
+		assertEqual(t, CountTotal(seg), uint64(1), "old message not pruned in segment "+seg)
+	}
 }
