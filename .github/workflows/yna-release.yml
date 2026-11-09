@@ -1,0 +1,76 @@
+# Fork only: build Linux binaries on YNA tags (eg: v1.33.1-yna.1) and attach them to a GitHub release.
+# The release is created with GITHUB_TOKEN, so upstream's build-release.yml does not trigger.
+on:
+  push:
+    tags: [ 'v*-yna.*' ]
+
+name: Build YNA release
+jobs:
+  build:
+    if: github.repository == 'yournextagency/mailpit'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: 22
+    - run: npm ci
+    - run: npm run package
+
+    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version-file: go.mod
+
+    - name: Generate third-party licenses
+      run: |
+        go install github.com/google/go-licenses/v2@v2.0.1
+        go-licenses report ./... --template .github/third-party-licenses.tpl --ignore github.com/axllent/mailpit > internal/licenses/third-party.txt
+
+    - name: Build
+      env:
+        CGO_ENABLED: "0"
+        GOOS: linux
+        GOARCH: ${{ matrix.goarch }}
+        VERSION: ${{ github.ref_name }}
+      run: |
+        name="mailpit-${VERSION}-linux-${GOARCH}"
+        mkdir -p "dist/${name}"
+        go build -trimpath -ldflags "-w -s -X github.com/axllent/mailpit/config.Version=${VERSION}" -o "dist/${name}/mailpit"
+        cp LICENSE README.md "dist/${name}/"
+        tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+        (cd dist && sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256")
+
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: linux-${{ matrix.goarch }}
+        path: |
+          dist/*.tar.gz
+          dist/*.sha256
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        path: dist
+        merge-multiple: true
+    - name: Create release
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TAG: ${{ github.ref_name }}
+      run: |
+        cat dist/*.sha256 > dist/SHA256SUMS
+        gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" \
+          --notes "YNA fork build of Mailpit with SMTP user segments. Linux binaries only." \
+          --prerelease dist/*.tar.gz dist/*.sha256 dist/SHA256SUMS
